@@ -4,7 +4,7 @@ import { useState, useRef } from 'react';
 import type { FormatConfig, CandidateFieldMapping } from '@/lib/types';
 import { SYSTEM_FIELDS } from '@/lib/types';
 import { saveFormat, newId } from '@/lib/storage';
-import { readFileAsRows } from '@/lib/transform';
+import { readFileAsRows, detectColumnType } from '@/lib/transform';
 
 interface Props {
   initial: FormatConfig;
@@ -16,6 +16,7 @@ interface Props {
 export default function FormatSetup({ initial, onSave, onCancel, onDelete }: Props) {
   const [fmt, setFmt] = useState<FormatConfig>(initial);
   const [detectedCols, setDetectedCols] = useState<string[]>([]);
+  const [colTypes, setColTypes] = useState<Record<string, 'date' | 'value'>>({});
   const [detecting, setDetecting] = useState(false);
   const sampleRef = useRef<HTMLInputElement>(null);
 
@@ -60,6 +61,7 @@ export default function FormatSetup({ initial, onSave, onCancel, onDelete }: Pro
     try {
       const parsed = await readFileAsRows(file);
       setDetectedCols(parsed.headers.filter(Boolean));
+      setColTypes(detectColumnType(parsed.headers, parsed.rows));
     } finally {
       setDetecting(false);
     }
@@ -200,12 +202,18 @@ export default function FormatSetup({ initial, onSave, onCancel, onDelete }: Pro
                       value={tc.outputTagGroup}
                       onChange={(e) => updateTagCol(tc.id, { outputTagGroup: e.target.value })}
                     />
-                    <input
-                      className="border border-slate-300 rounded px-2 py-1 text-sm"
-                      placeholder="e.g. Oral Interview"
-                      value={tc.outputTagName}
-                      onChange={(e) => updateTagCol(tc.id, { outputTagName: e.target.value })}
-                    />
+                    {colTypes[tc.inputColumn] === 'value' ? (
+                      <div className="border border-slate-200 rounded px-2 py-1 text-sm text-slate-400 bg-slate-50 italic select-none">
+                        Data Value
+                      </div>
+                    ) : (
+                      <input
+                        className="border border-slate-300 rounded px-2 py-1 text-sm"
+                        placeholder={tc.inputColumn || 'e.g. Oral Interview'}
+                        value={tc.outputTagName}
+                        onChange={(e) => updateTagCol(tc.id, { outputTagName: e.target.value })}
+                      />
+                    )}
                     <button
                       onClick={() => removeTagCol(tc.id)}
                       className="text-slate-400 hover:text-red-500 text-lg leading-none px-1"
