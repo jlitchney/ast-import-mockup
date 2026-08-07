@@ -1,22 +1,27 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import type { FormatConfig, CandidateFieldMapping } from '@/lib/types';
+import type { FormatConfig, CandidateFieldMapping, ParsedFile } from '@/lib/types';
 import { SYSTEM_FIELDS } from '@/lib/types';
 import { saveFormat, newId } from '@/lib/storage';
 import { readFileAsRows, detectColumnType } from '@/lib/transform';
 
 interface Props {
   initial: FormatConfig;
+  parsedFile?: ParsedFile | null;
   onSave: (fmt: FormatConfig) => void;
   onCancel: () => void;
   onDelete?: (id: string) => void;
 }
 
-export default function FormatSetup({ initial, onSave, onCancel, onDelete }: Props) {
+export default function FormatSetup({ initial, parsedFile, onSave, onCancel, onDelete }: Props) {
   const [fmt, setFmt] = useState<FormatConfig>(initial);
-  const [detectedCols, setDetectedCols] = useState<string[]>([]);
-  const [colTypes, setColTypes] = useState<Record<string, 'date' | 'value'>>({});
+  const [detectedCols, setDetectedCols] = useState<string[]>(
+    parsedFile ? parsedFile.headers.filter(Boolean) : []
+  );
+  const [colTypes, setColTypes] = useState<Record<string, 'date' | 'value'>>(
+    parsedFile ? detectColumnType(parsedFile.headers, parsedFile.rows) : {}
+  );
   const [detecting, setDetecting] = useState(false);
   const sampleRef = useRef<HTMLInputElement>(null);
 

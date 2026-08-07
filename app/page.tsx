@@ -366,6 +366,7 @@ export default function Page() {
       {showSetup && editingFmt && (
         <FormatSetup
           initial={editingFmt}
+          parsedFile={parsedFile}
           onSave={handleSaved}
           onCancel={() => { setShowSetup(false); setEditingFmt(null); }}
           onDelete={handleDeleted}
