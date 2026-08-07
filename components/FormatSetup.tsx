@@ -4,7 +4,7 @@ import { useState, useRef } from 'react';
 import type { FormatConfig, CandidateFieldMapping } from '@/lib/types';
 import { SYSTEM_FIELDS } from '@/lib/types';
 import { saveFormat, newId } from '@/lib/storage';
-import { readFileAsRows } from '@/lib/transform';
+import { readFileAsRows, detectColumnType } from '@/lib/transform';
 
 interface Props {
   initial: FormatConfig;
@@ -16,6 +16,7 @@ interface Props {
 export default function FormatSetup({ initial, onSave, onCancel, onDelete }: Props) {
   const [fmt, setFmt] = useState<FormatConfig>(initial);
   const [detectedCols, setDetectedCols] = useState<string[]>([]);
+  const [colTypes, setColTypes] = useState<Record<string, 'date' | 'value'>>({});
   const [detecting, setDetecting] = useState(false);
   const sampleRef = useRef<HTMLInputElement>(null);
 
@@ -43,7 +44,7 @@ export default function FormatSetup({ initial, onSave, onCancel, onDelete }: Pro
     updateFmt({
       tagColumns: [
         ...fmt.tagColumns,
-        { id: newId(), inputColumn: '', outputTagGroup: '', outputTagName: '' },
+        { id: newId(), inputColumn: '', columnType: 'date', outputTagGroup: '', outputTagName: '' },
       ],
     });
 
@@ -59,10 +60,18 @@ export default function FormatSetup({ initial, onSave, onCancel, onDelete }: Pro
     setDetecting(true);
     try {
       const parsed = await readFileAsRows(file);
-      setDetectedCols(parsed.headers.filter(Boolean));
+      const cols = parsed.headers.filter(Boolean);
+      const types = detectColumnType(parsed.headers, parsed.rows);
+      setDetectedCols(cols);
+      setColTypes(types);
     } finally {
       setDetecting(false);
     }
+  };
+
+  const handleColSelect = (id: string, inputColumn: string) => {
+    const detectedType = colTypes[inputColumn] ?? 'date';
+    updateTagCol(id, { inputColumn, columnType: detectedType });
   };
 
   const handleSave = () => {
@@ -72,30 +81,26 @@ export default function FormatSetup({ initial, onSave, onCancel, onDelete }: Pro
     onSave(trimmed);
   };
 
-  const colOptions = detectedCols.length > 0 ? detectedCols : [];
-
   const ColSelect = ({ value, onChange }: { value: string; onChange: (v: string) => void }) => (
-    <div className="flex gap-1">
-      {colOptions.length > 0 ? (
-        <select
-          className="flex-1 border border-slate-300 rounded px-2 py-1 text-sm bg-white"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          <option value="">— select column —</option>
-          {colOptions.map((c) => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
-      ) : (
-        <input
-          className="flex-1 border border-slate-300 rounded px-2 py-1 text-sm"
-          placeholder="Column header name"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      )}
-    </div>
+    detectedCols.length > 0 ? (
+      <select
+        className="flex-1 border border-slate-300 rounded px-2 py-1 text-sm bg-white"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">— select column —</option>
+        {detectedCols.map((c) => (
+          <option key={c} value={c}>{c}</option>
+        ))}
+      </select>
+    ) : (
+      <input
+        className="flex-1 border border-slate-300 rounded px-2 py-1 text-sm"
+        placeholder="Column header name"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    )
   );
 
   return (
@@ -135,7 +140,7 @@ export default function FormatSetup({ initial, onSave, onCancel, onDelete }: Pro
             </div>
             {detectedCols.length > 0 && (
               <p className="text-xs text-slate-500 mt-1">
-                {detectedCols.length} columns detected — dropdowns are now available above
+                {detectedCols.length} columns detected — column types auto-identified
               </p>
             )}
             <input
@@ -171,10 +176,13 @@ export default function FormatSetup({ initial, onSave, onCancel, onDelete }: Pro
           {/* Tag columns */}
           <div>
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-slate-700">Tag Columns</h3>
+              <div>
+                <h3 className="text-sm font-semibold text-slate-700">Tag Columns</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Date columns: cell value = tag date. Value columns: cell value = tag name, today = date.</p>
+              </div>
               <button
                 onClick={addTagCol}
-                className="text-sm px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                className="text-sm px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shrink-0"
               >
                 + Add column
               </button>
@@ -186,30 +194,59 @@ export default function FormatSetup({ initial, onSave, onCancel, onDelete }: Pro
               </p>
             ) : (
               <div className="space-y-2">
-                <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 text-xs font-medium text-slate-500 px-1">
+                <div className="grid grid-cols-[1fr_auto_1fr_1fr_auto] gap-2 text-xs font-medium text-slate-500 px-1">
                   <span>Input Column</span>
+                  <span>Type</span>
                   <span>Tag Group</span>
                   <span>Tag Name</span>
                   <span />
                 </div>
                 {fmt.tagColumns.map((tc) => (
-                  <div key={tc.id} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 items-center">
+                  <div key={tc.id} className="grid grid-cols-[1fr_auto_1fr_1fr_auto] gap-2 items-center">
+                    {/* Input column */}
                     <ColSelect
                       value={tc.inputColumn}
-                      onChange={(v) => updateTagCol(tc.id, { inputColumn: v })}
+                      onChange={(v) => handleColSelect(tc.id, v)}
                     />
+
+                    {/* Column type toggle */}
+                    <div className="flex rounded-lg border border-slate-300 overflow-hidden text-xs shrink-0">
+                      <button
+                        onClick={() => updateTagCol(tc.id, { columnType: 'date' })}
+                        className={`px-2 py-1.5 ${tc.columnType === 'date' ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+                      >
+                        Date
+                      </button>
+                      <button
+                        onClick={() => updateTagCol(tc.id, { columnType: 'value' })}
+                        className={`px-2 py-1.5 border-l border-slate-300 ${tc.columnType === 'value' ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+                      >
+                        Value
+                      </button>
+                    </div>
+
+                    {/* Tag Group */}
                     <input
                       className="border border-slate-300 rounded px-2 py-1 text-sm"
-                      placeholder="e.g. Skills"
+                      placeholder={tc.columnType === 'value' ? tc.inputColumn || 'e.g. Status' : 'e.g. Exams'}
                       value={tc.outputTagGroup}
                       onChange={(e) => updateTagCol(tc.id, { outputTagGroup: e.target.value })}
                     />
-                    <input
-                      className="border border-slate-300 rounded px-2 py-1 text-sm"
-                      placeholder="e.g. Excel"
-                      value={tc.outputTagName}
-                      onChange={(e) => updateTagCol(tc.id, { outputTagName: e.target.value })}
-                    />
+
+                    {/* Tag Name */}
+                    {tc.columnType === 'date' ? (
+                      <input
+                        className="border border-slate-300 rounded px-2 py-1 text-sm"
+                        placeholder={tc.inputColumn || 'e.g. Oral Interview'}
+                        value={tc.outputTagName}
+                        onChange={(e) => updateTagCol(tc.id, { outputTagName: e.target.value })}
+                      />
+                    ) : (
+                      <div className="border border-slate-200 rounded px-2 py-1 text-sm text-slate-400 bg-slate-50 italic">
+                        from cell
+                      </div>
+                    )}
+
                     <button
                       onClick={() => removeTagCol(tc.id)}
                       className="text-slate-400 hover:text-red-500 text-lg leading-none px-1"
@@ -221,7 +258,6 @@ export default function FormatSetup({ initial, onSave, onCancel, onDelete }: Pro
               </div>
             )}
           </div>
-
         </div>
 
         {/* Footer */}

@@ -1,9 +1,46 @@
 import type { FormatConfig, ParsedFile, CandidateRow, TagColumnMapping } from './types';
 
-function buildTagLabel(tc: TagColumnMapping): string {
-  const group = tc.outputTagGroup?.trim();
-  const name = tc.outputTagName?.trim() || tc.inputColumn;
-  return group ? `${group} > ${name}` : name;
+function formatDateValue(value: string): string {
+  // xlsx returns ISO strings like "2026-08-22T07:00:00.000Z" — use UTC to avoid day shift
+  try {
+    const d = new Date(value);
+    if (!isNaN(d.getTime())) {
+      const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(d.getUTCDate()).padStart(2, '0');
+      const y = d.getUTCFullYear();
+      return `${m}/${day}/${y}`;
+    }
+  } catch {}
+  return value;
+}
+
+function todayFormatted(): string {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${m}/${day}/${d.getFullYear()}`;
+}
+
+export function looksLikeDate(value: string): boolean {
+  if (!value) return false;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(value)) return true;
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(value)) return true;
+  const d = new Date(value);
+  return !isNaN(d.getTime()) && /\d{4}/.test(value) && value.length >= 8;
+}
+
+export function detectColumnType(
+  headers: string[],
+  rows: (string | number | Date | null | undefined)[][]
+): Record<string, 'date' | 'value'> {
+  const result: Record<string, 'date' | 'value'> = {};
+  headers.forEach((h, i) => {
+    const vals = rows.map((r) => r[i]).filter((v) => v != null && String(v).trim() !== '');
+    if (vals.length === 0) { result[h] = 'value'; return; }
+    const dateCount = vals.filter((v) => looksLikeDate(String(v))).length;
+    result[h] = dateCount / vals.length >= 0.5 ? 'date' : 'value';
+  });
+  return result;
 }
 
 export async function readFileAsRows(file: File): Promise<ParsedFile> {
@@ -40,6 +77,7 @@ export async function readFileAsRows(file: File): Promise<ParsedFile> {
 
 export function extractCandidates(file: ParsedFile, config: FormatConfig): CandidateRow[] {
   const { headers, rows } = file;
+  const today = todayFormatted();
 
   const fieldIndex = new Map<string, number>();
   for (const mapping of config.candidateFields) {
@@ -51,7 +89,7 @@ export function extractCandidates(file: ParsedFile, config: FormatConfig): Candi
 
   const tagCols = config.tagColumns
     .filter((tc) => tc.inputColumn)
-    .map((tc) => ({ tc, idx: headers.indexOf(tc.inputColumn), label: buildTagLabel(tc) }))
+    .map((tc) => ({ tc, idx: headers.indexOf(tc.inputColumn) }))
     .filter((t) => t.idx >= 0);
 
   const emailIdx = fieldIndex.get('email') ?? -1;
@@ -59,9 +97,24 @@ export function extractCandidates(file: ParsedFile, config: FormatConfig): Candi
   return rows
     .map((row) => {
       const get = (idx: number) => (idx >= 0 ? String(row[idx] ?? '').trim() : '');
-      const tags = tagCols
-        .filter(({ idx }) => row[idx] != null && String(row[idx]).trim() !== '')
-        .map(({ label, idx }) => ({ label, date: String(row[idx]).trim() }));
+      const tags: { label: string; date: string }[] = [];
+
+      for (const { tc, idx } of tagCols) {
+        const raw = row[idx];
+        if (raw == null || String(raw).trim() === '') continue;
+        const cellValue = String(raw).trim();
+
+        if (tc.columnType === 'value') {
+          const group = tc.outputTagGroup?.trim() || tc.inputColumn;
+          const label = `${group} > ${cellValue}`;
+          tags.push({ label, date: today });
+        } else {
+          const group = tc.outputTagGroup?.trim();
+          const name = tc.outputTagName?.trim() || tc.inputColumn;
+          const label = group ? `${group} > ${name}` : name;
+          tags.push({ label, date: formatDateValue(cellValue) });
+        }
+      }
 
       return {
         email: get(emailIdx),
