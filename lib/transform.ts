@@ -1,17 +1,26 @@
 import type { FormatConfig, ParsedFile, CandidateRow, TagColumnMapping } from './types';
 
-function formatDateValue(value: string): string {
-  // xlsx returns ISO strings like "2026-08-22T07:00:00.000Z" — use UTC to avoid day shift
-  try {
-    const d = new Date(value);
-    if (!isNaN(d.getTime())) {
-      const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-      const day = String(d.getUTCDate()).padStart(2, '0');
-      const y = d.getUTCFullYear();
-      return `${m}/${day}/${y}`;
-    }
-  } catch {}
-  return value;
+function formatDateValue(value: string | number | Date | null | undefined): string {
+  if (value instanceof Date) {
+    if (isNaN(value.getTime())) return '';
+    const m = String(value.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(value.getUTCDate()).padStart(2, '0');
+    return `${m}/${day}/${value.getUTCFullYear()}`;
+  }
+  const s = String(value ?? '').trim();
+  if (!s) return s;
+  // ISO string fallback (e.g. from CSV or older XLSX paths)
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) {
+    try {
+      const d = new Date(s);
+      if (!isNaN(d.getTime())) {
+        const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(d.getUTCDate()).padStart(2, '0');
+        return `${m}/${day}/${d.getUTCFullYear()}`;
+      }
+    } catch {}
+  }
+  return s;
 }
 
 function todayFormatted(): string {
@@ -21,12 +30,15 @@ function todayFormatted(): string {
   return `${m}/${day}/${d.getFullYear()}`;
 }
 
-export function looksLikeDate(value: string): boolean {
-  if (!value) return false;
-  if (/^\d{4}-\d{2}-\d{2}T/.test(value)) return true;
-  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(value)) return true;
-  const d = new Date(value);
-  return !isNaN(d.getTime()) && /\d{4}/.test(value) && value.length >= 8;
+export function looksLikeDate(value: unknown): boolean {
+  if (value instanceof Date) return !isNaN(value.getTime());
+  if (value == null) return false;
+  const s = String(value).trim();
+  if (!s || !/\d/.test(s)) return false;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return true;
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) return true;
+  const d = new Date(s);
+  return !isNaN(d.getTime()) && /\d{4}/.test(s) && s.length >= 8;
 }
 
 export function detectColumnType(
@@ -37,7 +49,7 @@ export function detectColumnType(
   headers.forEach((h, i) => {
     const vals = rows.map((r) => r[i]).filter((v) => v != null && String(v).trim() !== '');
     if (vals.length === 0) { result[h] = 'value'; return; }
-    const dateCount = vals.filter((v) => looksLikeDate(String(v))).length;
+    const dateCount = vals.filter((v) => looksLikeDate(v)).length;
     result[h] = dateCount / vals.length >= 0.5 ? 'date' : 'value';
   });
   return result;
@@ -64,12 +76,13 @@ export async function readFileAsRows(file: File): Promise<ParsedFile> {
 
   const XLSX = await import('xlsx');
   const buffer = await file.arrayBuffer();
+  // cellDates: true → date cells become Date objects; raw: true → keep them as-is (not re-formatted as strings)
   const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const rawRows = XLSX.utils.sheet_to_json<(string | number | Date | null)[]>(sheet, {
     header: 1,
     defval: null,
-    raw: false,
+    raw: true,
   });
   const headers = ((rawRows[0] ?? []) as unknown[]).map(String);
   return { headers, rows: rawRows.slice(1) as (string | number | Date | null)[][], fileName: file.name };
@@ -87,7 +100,6 @@ export function extractCandidates(file: ParsedFile, config: FormatConfig): Candi
     }
   }
 
-  // Auto-detect column type from actual file data
   const colTypes = detectColumnType(headers, rows);
 
   const tagCols = config.tagColumns
@@ -105,17 +117,16 @@ export function extractCandidates(file: ParsedFile, config: FormatConfig): Candi
       for (const { tc, idx, isDate } of tagCols) {
         const raw = row[idx];
         if (raw == null || String(raw).trim() === '') continue;
-        const cellValue = String(raw).trim();
 
         if (isDate) {
           const group = tc.outputTagGroup?.trim();
           const name = tc.outputTagName?.trim() || tc.inputColumn;
           const label = group ? `${group} > ${name}` : name;
-          tags.push({ label, date: formatDateValue(cellValue) });
+          tags.push({ label, date: formatDateValue(raw) });
         } else {
+          const cellValue = String(raw).trim();
           const group = tc.outputTagGroup?.trim() || tc.inputColumn;
-          const label = `${group} > ${cellValue}`;
-          tags.push({ label, date: today });
+          tags.push({ label: `${group} > ${cellValue}`, date: today });
         }
       }
 
