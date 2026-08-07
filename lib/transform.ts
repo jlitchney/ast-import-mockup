@@ -87,9 +87,12 @@ export function extractCandidates(file: ParsedFile, config: FormatConfig): Candi
     }
   }
 
+  // Auto-detect column type from actual file data
+  const colTypes = detectColumnType(headers, rows);
+
   const tagCols = config.tagColumns
     .filter((tc) => tc.inputColumn)
-    .map((tc) => ({ tc, idx: headers.indexOf(tc.inputColumn) }))
+    .map((tc) => ({ tc, idx: headers.indexOf(tc.inputColumn), isDate: colTypes[tc.inputColumn] === 'date' }))
     .filter((t) => t.idx >= 0);
 
   const emailIdx = fieldIndex.get('email') ?? -1;
@@ -99,20 +102,20 @@ export function extractCandidates(file: ParsedFile, config: FormatConfig): Candi
       const get = (idx: number) => (idx >= 0 ? String(row[idx] ?? '').trim() : '');
       const tags: { label: string; date: string }[] = [];
 
-      for (const { tc, idx } of tagCols) {
+      for (const { tc, idx, isDate } of tagCols) {
         const raw = row[idx];
         if (raw == null || String(raw).trim() === '') continue;
         const cellValue = String(raw).trim();
 
-        if (tc.columnType === 'value') {
-          const group = tc.outputTagGroup?.trim() || tc.inputColumn;
-          const label = `${group} > ${cellValue}`;
-          tags.push({ label, date: today });
-        } else {
+        if (isDate) {
           const group = tc.outputTagGroup?.trim();
           const name = tc.outputTagName?.trim() || tc.inputColumn;
           const label = group ? `${group} > ${name}` : name;
           tags.push({ label, date: formatDateValue(cellValue) });
+        } else {
+          const group = tc.outputTagGroup?.trim() || tc.inputColumn;
+          const label = `${group} > ${cellValue}`;
+          tags.push({ label, date: today });
         }
       }
 

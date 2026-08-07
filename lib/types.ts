@@ -15,7 +15,6 @@ export interface CandidateFieldMapping {
 export interface TagColumnMapping {
   id: string;
   inputColumn: string;
-  columnType: 'date' | 'value';
   outputTagGroup: string;
   outputTagName: string;
 }
